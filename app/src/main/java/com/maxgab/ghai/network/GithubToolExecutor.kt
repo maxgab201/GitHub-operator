@@ -89,9 +89,10 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         client.newCall(requestBuilder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw HttpStatusException(response.code, text.take(2000))
+            val truncatedText = truncateForModel(text)
             buildJsonObject {
                 put("status", JsonPrimitive(response.code))
-                put("body", runCatching { json.parseToJsonElement(text.ifBlank { "null" }) }.getOrDefault(JsonPrimitive(text)))
+                put("body", runCatching { json.parseToJsonElement(truncatedText.ifBlank { "null" }) }.getOrDefault(JsonPrimitive(truncatedText)))
             }.toString()
         }
     }
@@ -116,7 +117,7 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw HttpStatusException(response.code, text.take(2000))
-            text
+            truncateForModel(text)
         }
     }
 
@@ -124,7 +125,20 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         put("error", JsonPrimitive(message))
     }.toString()
 
+    /**
+     * Caps a tool result before it's fed back into the conversation. Without this,
+     * a single call that returns a huge payload (e.g. listing hundreds of repos or
+     * files) can by itself push the whole chat past the model's context limit,
+     * which is a hard, non-retryable failure — better to hand the model a
+     * truncated-but-usable result and let it page/filter with a follow-up call.
+     */
+    private fun truncateForModel(text: String): String =
+        if (text.length <= MAX_TOOL_RESULT_CHARS) text
+        else text.take(MAX_TOOL_RESULT_CHARS) + "\n…(resultado truncado, eran ${text.length} caracteres; " +
+            "si necesitas más detalle, pedí menos elementos por página o un recurso más específico)"
+
     companion object {
         private val EMPTY_JSON_BODY = "{}".toRequestBody("application/json".toMediaType())
+        private const val MAX_TOOL_RESULT_CHARS = 12_000
     }
 }

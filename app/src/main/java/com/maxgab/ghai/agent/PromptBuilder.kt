@@ -59,9 +59,22 @@ el idioma del usuario, de forma clara y concisa, y usa Markdown (incluyendo tabl
 código) cuando ayude a presentar la información.
 """
 
+/**
+ * Rough char budget for the whole conversation sent to the model (~4 chars/token,
+ * so this targets ~60k tokens — comfortably under every current model's context
+ * window even after accounting for the system prompt, tool schemas and the
+ * model's own output). Without this, a long-running chat that calls tools
+ * returning large JSON blobs (e.g. listing many repos/files) eventually exceeds
+ * the model's real context limit with a hard, non-retryable 400 error that would
+ * otherwise permanently brick that chat, since every retry re-sends the same
+ * oversized history.
+ */
+private const val MAX_CONTEXT_CHARS = 240_000
+
 fun buildOrMessages(history: List<ChatMessage>): List<OrMessage> {
-    val messages = mutableListOf(OrMessage(role = "system", content = SYSTEM_PROMPT.trim()))
-    history.forEach { m ->
+    val system = OrMessage(role = "system", content = SYSTEM_PROMPT.trim())
+    val messages = mutableListOf(system)
+    trimToRecentTurns(history, MAX_CONTEXT_CHARS - system.content.orEmpty().length).forEach { m ->
         when (m.role) {
             MessageRole.SYSTEM -> Unit
             MessageRole.USER -> messages += OrMessage(role = "user", content = m.content)
@@ -81,4 +94,34 @@ fun buildOrMessages(history: List<ChatMessage>): List<OrMessage> {
         }
     }
     return messages
+}
+
+/**
+ * Groups the history into turns (a user message plus everything that follows it,
+ * up to the next user message) and keeps only the most recent turns that fit
+ * within [maxChars], dropping the oldest ones first. The most recent turn is
+ * always kept even if it alone exceeds the budget — trimming can't help with
+ * that, and sending it as-is at least gives the model a chance instead of
+ * sending nothing. Trimming whole turns (never mid-turn) keeps every
+ * assistant tool_call paired with its tool response, which the API requires.
+ */
+private fun trimToRecentTurns(history: List<ChatMessage>, maxChars: Int): List<ChatMessage> {
+    val turns = mutableListOf<MutableList<ChatMessage>>()
+    history.forEach { m ->
+        if (m.role == MessageRole.USER || turns.isEmpty()) turns.add(mutableListOf(m)) else turns.last().add(m)
+    }
+
+    fun turnChars(turn: List<ChatMessage>) = turn.sumOf { m ->
+        m.content.length + m.reasoning.length + m.toolCalls.sumOf { it.arguments.length + it.name.length }
+    }
+
+    val kept = ArrayDeque<List<ChatMessage>>()
+    var total = 0
+    for (turn in turns.asReversed()) {
+        val size = turnChars(turn)
+        if (kept.isNotEmpty() && total + size > maxChars) break
+        kept.addFirst(turn)
+        total += size
+    }
+    return kept.flatten()
 }

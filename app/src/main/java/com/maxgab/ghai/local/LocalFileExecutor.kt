@@ -87,9 +87,15 @@ class LocalFileExecutor(context: Context) {
         if (file.length() > MAX_READ_BYTES) {
             return errorJson("El archivo pesa ${file.length()} bytes, supera el máximo legible de $MAX_READ_BYTES bytes.")
         }
+        val text = file.readText()
+        // Cap what actually goes back into the model's context — a large-but-under-MAX_READ_BYTES
+        // file could still blow the conversation's token budget on its own otherwise.
+        val content = if (text.length > MAX_CONTENT_CHARS) {
+            text.take(MAX_CONTENT_CHARS) + "\n…(truncado, el archivo tiene ${text.length} caracteres en total)"
+        } else text
         return buildJsonObject {
             put("path", JsonPrimitive(relativePath))
-            put("content", JsonPrimitive(file.readText()))
+            put("content", JsonPrimitive(content))
         }.toString()
     }
 
@@ -151,5 +157,6 @@ class LocalFileExecutor(context: Context) {
 
     companion object {
         private const val MAX_READ_BYTES = 2 * 1024 * 1024 // 2 MB safety cap to avoid OOM, not a feature limit
+        private const val MAX_CONTENT_CHARS = 12_000 // keeps a single read from blowing the model's context budget
     }
 }
