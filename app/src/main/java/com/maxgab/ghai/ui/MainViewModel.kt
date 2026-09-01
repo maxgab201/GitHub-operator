@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+
 package com.maxgab.ghai.ui
 
 import androidx.lifecycle.ViewModel
@@ -17,12 +19,17 @@ import com.maxgab.ghai.data.model.ChatSession
 import com.maxgab.ghai.data.model.MessageRole
 import com.maxgab.ghai.data.model.MessageStatus
 import com.maxgab.ghai.data.model.ToolCall
+import com.maxgab.ghai.data.LlmProvider
+import com.maxgab.ghai.service.GenerationForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -36,8 +43,9 @@ data class ChatUiState(
     val editingMessageId: String? = null,
     val isGenerating: Boolean = false,
     val settings: AppSettings = AppSettings(),
-    val usage: UsageState = UsageState(0, UsageTracker.DAILY_LIMIT, ""),
-    val errorMessage: String? = null
+    val usage: UsageState = UsageState(0, LlmProvider.OPENROUTER.dailyLimit, ""),
+    val errorMessage: String? = null,
+    val retryStatus: String? = null
 )
 
 class MainViewModel(
@@ -66,7 +74,9 @@ class MainViewModel(
             settingsRepository.settings.collect { s -> _state.update { it.copy(settings = s) } }
         }
         viewModelScope.launch {
-            usageTracker.usage.collect { u -> _state.update { it.copy(usage = u) } }
+            settingsRepository.settings.map { it.provider }.distinctUntilChanged()
+                .flatMapLatest { provider -> usageTracker.observeUsage(provider) }
+                .collect { u -> _state.update { it.copy(usage = u) } }
         }
     }
 
@@ -122,10 +132,15 @@ class MainViewModel(
     }
 
     suspend fun getOpenRouterKey(): String = withContext(Dispatchers.IO) { settingsRepository.getOpenRouterKey() }
+    suspend fun getGeminiKey(): String = withContext(Dispatchers.IO) { settingsRepository.getGeminiKey() }
     suspend fun getGithubToken(): String = withContext(Dispatchers.IO) { settingsRepository.getGithubToken() }
 
     fun setOpenRouterKey(value: String) {
         viewModelScope.launch(Dispatchers.IO) { settingsRepository.setOpenRouterKey(value) }
+    }
+
+    fun setGeminiKey(value: String) {
+        viewModelScope.launch(Dispatchers.IO) { settingsRepository.setGeminiKey(value) }
     }
 
     fun setGithubToken(value: String) {
@@ -174,7 +189,8 @@ class MainViewModel(
     private fun runAgent(sessionId: String, historyAtStart: List<ChatMessage>) {
         generationJob?.cancel()
         generationJob = viewModelScope.launch {
-            _state.update { it.copy(isGenerating = true, errorMessage = null) }
+            _state.update { it.copy(isGenerating = true, errorMessage = null, retryStatus = null) }
+            GenerationForegroundService.start(app)
             val settings = state.value.settings
             var orderCounter = historyAtStart.size.toLong()
             var currentAssistant: ChatMessage? = null
@@ -193,7 +209,14 @@ class MainViewModel(
             try {
                 agentEngine().run(buildOrMessages(historyAtStart), settings).collect { event ->
                     when (event) {
+                        is AgentEvent.Retrying -> {
+                            val secs = (event.delayMs / 1000).coerceAtLeast(1)
+                            _state.update {
+                                it.copy(retryStatus = "Reintentando en ${secs}s (intento ${event.attempt + 1})… ${event.message}".take(180))
+                            }
+                        }
                         is AgentEvent.Reasoning -> {
+                            _state.update { it.copy(retryStatus = null) }
                             if (currentAssistant == null || currentAssistant!!.toolCalls.isNotEmpty()) {
                                 currentAssistant = ChatMessage(
                                     id = UUID.randomUUID().toString(),
@@ -208,6 +231,7 @@ class MainViewModel(
                             updateUiMessage(currentAssistant!!)
                         }
                         is AgentEvent.Content -> {
+                            _state.update { it.copy(retryStatus = null) }
                             if (currentAssistant == null || currentAssistant!!.toolCalls.isNotEmpty()) {
                                 currentAssistant = ChatMessage(
                                     id = UUID.randomUUID().toString(),
@@ -226,6 +250,7 @@ class MainViewModel(
                             updateUiMessage(currentAssistant!!)
                         }
                         is AgentEvent.ToolCallBegin -> {
+                            _state.update { it.copy(retryStatus = null) }
                             if (currentAssistant == null) {
                                 currentAssistant = ChatMessage(
                                     id = UUID.randomUUID().toString(),
@@ -267,6 +292,7 @@ class MainViewModel(
                             chatRepository.saveMessage(done)
                         }
                         is AgentEvent.TurnFinished -> {
+                            _state.update { it.copy(retryStatus = null) }
                             val cur = (currentAssistant ?: ChatMessage(
                                 id = UUID.randomUUID().toString(),
                                 sessionId = sessionId,
@@ -280,6 +306,7 @@ class MainViewModel(
                             maybeAutoTitle(sessionId, isFirstExchange, historyAtStart, event.finalContent, settings)
                         }
                         is AgentEvent.Failed -> {
+                            _state.update { it.copy(retryStatus = null) }
                             val cur = (currentAssistant ?: ChatMessage(
                                 id = UUID.randomUUID().toString(),
                                 sessionId = sessionId,
@@ -303,7 +330,8 @@ class MainViewModel(
                 }
             } finally {
                 withContext(NonCancellable) {
-                    _state.update { it.copy(isGenerating = false) }
+                    _state.update { it.copy(isGenerating = false, retryStatus = null) }
+                    GenerationForegroundService.stop(app)
                 }
             }
         }

@@ -16,19 +16,22 @@ private val Context.dataStore by preferencesDataStore(name = "ghai_settings")
 
 enum class AppTheme { LIGHT, DARK, SYSTEM }
 
+enum class LlmProvider(val label: String, val dailyLimit: Int, val defaultModel: String) {
+    OPENROUTER("OpenRouter", 1000, "nvidia/nemotron-3.5-lightning:free"),
+    GEMINI("Google AI Studio (Gemini)", 500, "gemini-3.5-flash-lite")
+}
+
 data class AppSettings(
-    val model: String = DEFAULT_MODEL,
+    val provider: LlmProvider = LlmProvider.OPENROUTER,
+    val model: String = LlmProvider.OPENROUTER.defaultModel,
     val effort: EffortLevel = EffortLevel.MEDIUM,
     val temperature: Double = 0.7,
     val theme: AppTheme = AppTheme.SYSTEM,
     val autoTitleSessions: Boolean = true
-) {
-    companion object {
-        const val DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning:free"
-    }
-}
+)
 
 private object Keys {
+    val PROVIDER = stringPreferencesKey("provider")
     val MODEL = stringPreferencesKey("model")
     val EFFORT = stringPreferencesKey("effort")
     val TEMPERATURE = doublePreferencesKey("temperature")
@@ -52,8 +55,10 @@ class SettingsRepository(private val context: Context) {
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
+        val provider = prefs[Keys.PROVIDER]?.let { runCatching { LlmProvider.valueOf(it) }.getOrNull() } ?: LlmProvider.OPENROUTER
         AppSettings(
-            model = prefs[Keys.MODEL] ?: AppSettings.DEFAULT_MODEL,
+            provider = provider,
+            model = prefs[Keys.MODEL] ?: provider.defaultModel,
             effort = EffortLevel.fromName(prefs[Keys.EFFORT]),
             temperature = prefs[Keys.TEMPERATURE] ?: 0.7,
             theme = prefs[Keys.THEME]?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.SYSTEM,
@@ -61,6 +66,11 @@ class SettingsRepository(private val context: Context) {
         )
     }
 
+    /** Switching provider also resets the model to that provider's default, unless [model] is given. */
+    suspend fun setProvider(provider: LlmProvider, model: String = provider.defaultModel) = context.dataStore.edit {
+        it[Keys.PROVIDER] = provider.name
+        it[Keys.MODEL] = model
+    }
     suspend fun setModel(model: String) = context.dataStore.edit { it[Keys.MODEL] = model }
     suspend fun setEffort(effort: EffortLevel) = context.dataStore.edit { it[Keys.EFFORT] = effort.name }
     suspend fun setTemperature(value: Double) = context.dataStore.edit { it[Keys.TEMPERATURE] = value }
@@ -70,18 +80,29 @@ class SettingsRepository(private val context: Context) {
     fun getOpenRouterKey(): String = securePrefs.getString(KEY_OPENROUTER, "") ?: ""
     fun setOpenRouterKey(value: String) = securePrefs.edit().putString(KEY_OPENROUTER, value).apply()
 
+    fun getGeminiKey(): String = securePrefs.getString(KEY_GEMINI, "") ?: ""
+    fun setGeminiKey(value: String) = securePrefs.edit().putString(KEY_GEMINI, value).apply()
+
     fun getGithubToken(): String = securePrefs.getString(KEY_GITHUB, "") ?: ""
     fun setGithubToken(value: String) = securePrefs.edit().putString(KEY_GITHUB, value).apply()
 
     companion object {
         private const val KEY_OPENROUTER = "openrouter_api_key"
+        private const val KEY_GEMINI = "gemini_api_key"
         private const val KEY_GITHUB = "github_token"
 
-        val MODEL_PRESETS = listOf(
+        val OPENROUTER_MODEL_PRESETS = listOf(
             "nvidia/nemotron-3.5-lightning:free",
             "nvidia/nemotron-3.5-lightning",
             "nvidia/llama-3.1-nemotron-70b-instruct:free",
             "nvidia/nemotron-nano-9b-v2:free"
+        )
+
+        val GEMINI_MODEL_PRESETS = listOf(
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash"
         )
     }
 }

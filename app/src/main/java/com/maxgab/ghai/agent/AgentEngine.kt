@@ -1,7 +1,10 @@
 package com.maxgab.ghai.agent
 
 import com.maxgab.ghai.data.AppSettings
+import com.maxgab.ghai.data.LlmProvider
 import com.maxgab.ghai.data.model.ToolCall
+import com.maxgab.ghai.network.GeminiClient
+import com.maxgab.ghai.network.LlmClient
 import com.maxgab.ghai.network.OpenRouterClient
 import com.maxgab.ghai.network.OrChatRequest
 import com.maxgab.ghai.network.OrFunctionCall
@@ -22,13 +25,20 @@ sealed interface AgentEvent {
     data class ToolCallEnd(val id: String, val name: String, val resultJson: String, val success: Boolean) : AgentEvent
     data class TurnFinished(val finalContent: String, val thinkingMillis: Long) : AgentEvent
     data class Failed(val message: String) : AgentEvent
+    data class Retrying(val attempt: Int, val delayMs: Long, val message: String) : AgentEvent
 }
 
 class AgentEngine(
     private val openRouterClient: OpenRouterClient,
+    private val geminiClient: GeminiClient,
     private val toolRouter: ToolRouter
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun clientFor(settings: AppSettings): LlmClient = when (settings.provider) {
+        LlmProvider.OPENROUTER -> openRouterClient
+        LlmProvider.GEMINI -> geminiClient
+    }
 
     /**
      * Runs the model/tool loop with no step cap: it keeps calling tools and feeding
@@ -39,6 +49,7 @@ class AgentEngine(
      */
     fun run(seedMessages: List<OrMessage>, settings: AppSettings): Flow<AgentEvent> = channelFlow {
         val messages = seedMessages.toMutableList()
+        val llmClient = clientFor(settings)
 
         while (true) {
             val request = OrChatRequest(
@@ -56,7 +67,7 @@ class AgentEngine(
             val thinkStart = System.currentTimeMillis()
             var thinkEnd = thinkStart
 
-            openRouterClient.streamChat(request).collect { event ->
+            llmClient.streamChat(request).collect { event ->
                 when (event) {
                     is StreamEvent.ReasoningDelta -> {
                         reasoningBuilder.append(event.text)
@@ -77,6 +88,9 @@ class AgentEngine(
                     is StreamEvent.Failed -> {
                         streamFailed = true
                         send(AgentEvent.Failed(event.message))
+                    }
+                    is StreamEvent.Retrying -> {
+                        send(AgentEvent.Retrying(event.attempt, event.delayMs, event.message))
                     }
                 }
             }

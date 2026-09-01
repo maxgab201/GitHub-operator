@@ -23,31 +23,30 @@ data class UsageState(
 }
 
 /**
- * Tracks OpenRouter's free-tier daily request cap (1000 req/day) locally, since the
- * app has no server to hold this state. Counter resets whenever the local calendar
- * day (device timezone) changes.
+ * Tracks each provider's free-tier daily request cap locally (OpenRouter: 1000/day,
+ * Gemini: 500/day), since the app has no server to hold this state. Each provider
+ * gets its own counter, keyed by provider name, and resets whenever the local
+ * calendar day (device timezone) changes.
  */
 class UsageTracker(private val context: Context) {
 
-    private object Keys {
-        val DAY_KEY = stringPreferencesKey("day_key")
-        val COUNT = longPreferencesKey("count")
-    }
+    private fun dayKeyPref(provider: LlmProvider) = stringPreferencesKey("day_key_${provider.name}")
+    private fun countPref(provider: LlmProvider) = longPreferencesKey("count_${provider.name}")
 
-    val usage: Flow<UsageState> = context.usageDataStore.data.map { prefs ->
+    fun observeUsage(provider: LlmProvider): Flow<UsageState> = context.usageDataStore.data.map { prefs ->
         val today = todayKey()
-        val storedDay = prefs[Keys.DAY_KEY]
-        val count = if (storedDay == today) (prefs[Keys.COUNT] ?: 0L).toInt() else 0
-        UsageState(requestsToday = count, dailyLimit = DAILY_LIMIT, dayKey = today)
+        val storedDay = prefs[dayKeyPref(provider)]
+        val count = if (storedDay == today) (prefs[countPref(provider)] ?: 0L).toInt() else 0
+        UsageState(requestsToday = count, dailyLimit = provider.dailyLimit, dayKey = today)
     }
 
-    suspend fun recordRequest() {
+    suspend fun recordRequest(provider: LlmProvider) {
         val today = todayKey()
         context.usageDataStore.edit { prefs ->
-            val storedDay = prefs[Keys.DAY_KEY]
-            val current = if (storedDay == today) (prefs[Keys.COUNT] ?: 0L) else 0L
-            prefs[Keys.DAY_KEY] = today
-            prefs[Keys.COUNT] = current + 1
+            val storedDay = prefs[dayKeyPref(provider)]
+            val current = if (storedDay == today) (prefs[countPref(provider)] ?: 0L) else 0L
+            prefs[dayKeyPref(provider)] = today
+            prefs[countPref(provider)] = current + 1
         }
     }
 
@@ -55,9 +54,5 @@ class UsageTracker(private val context: Context) {
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         fmt.timeZone = TimeZone.getDefault()
         return fmt.format(System.currentTimeMillis())
-    }
-
-    companion object {
-        const val DAILY_LIMIT = 1000
     }
 }

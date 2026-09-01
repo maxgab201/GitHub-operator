@@ -114,6 +114,9 @@ fun ChatScreen(
             bottomBar = {
                 Column {
                     state.errorMessage?.let { ErrorBanner(it) }
+                    if (state.errorMessage == null) {
+                        state.retryStatus?.let { RetryBanner(it) }
+                    }
                     ChatInputBar(
                         text = state.inputText,
                         isEditing = state.editingMessageId != null,
@@ -174,6 +177,24 @@ private fun ErrorBanner(message: String) {
             text = message,
             color = MaterialTheme.colorScheme.onErrorContainer,
             style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+    }
+}
+
+@Composable
+private fun RetryBanner(message: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(0.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = message,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
         )
     }

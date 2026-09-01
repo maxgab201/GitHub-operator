@@ -11,6 +11,7 @@ import com.maxgab.ghai.data.db.AppDatabase
 import com.maxgab.ghai.local.AppLauncher
 import com.maxgab.ghai.local.LocalFileExecutor
 import com.maxgab.ghai.local.LocalGitExecutor
+import com.maxgab.ghai.network.GeminiClient
 import com.maxgab.ghai.network.GithubToolExecutor
 import com.maxgab.ghai.network.OpenRouterClient
 
@@ -23,6 +24,8 @@ class GhAiApp : Application() {
     lateinit var chatRepository: ChatRepository
         private set
     lateinit var openRouterClient: OpenRouterClient
+        private set
+    lateinit var geminiClient: GeminiClient
         private set
     lateinit var githubToolExecutor: GithubToolExecutor
         private set
@@ -46,12 +49,13 @@ class GhAiApp : Application() {
         val db = AppDatabase.get(this)
         chatRepository = ChatRepository(db.sessionDao(), db.messageDao())
         openRouterClient = OpenRouterClient(settingsRepository, usageTracker)
+        geminiClient = GeminiClient(settingsRepository, usageTracker)
         githubToolExecutor = GithubToolExecutor(settingsRepository)
         localFileExecutor = LocalFileExecutor(this)
         localGitExecutor = LocalGitExecutor(this, settingsRepository)
         appLauncher = AppLauncher(this)
         toolRouter = ToolRouter(githubToolExecutor, localFileExecutor, localGitExecutor, appLauncher)
-        agentEngine = AgentEngine(openRouterClient, toolRouter)
-        sessionTitler = SessionTitler(openRouterClient)
+        agentEngine = AgentEngine(openRouterClient, geminiClient, toolRouter)
+        sessionTitler = SessionTitler(openRouterClient, geminiClient)
     }
 }

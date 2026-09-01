@@ -1,5 +1,6 @@
 package com.maxgab.ghai.network
 
+import com.maxgab.ghai.data.LlmProvider
 import com.maxgab.ghai.data.SettingsRepository
 import com.maxgab.ghai.data.UsageTracker
 import kotlinx.coroutines.CancellationException
@@ -34,7 +35,7 @@ private sealed interface AttemptOutcome {
 class OpenRouterClient(
     private val settings: SettingsRepository,
     private val usage: UsageTracker
-) {
+) : LlmClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         // Inactivity timeout, not a total-duration cap: as long as OpenRouter keeps
@@ -58,11 +59,11 @@ class OpenRouterClient(
      * surfaced as [StreamEvent.Failed]; the caller (agent loop) can still cancel
      * via the Stop button, which cancels this flow's collection.
      */
-    fun streamChat(request: OrChatRequest): Flow<StreamEvent> = channelFlow {
+    override fun streamChat(request: OrChatRequest): Flow<StreamEvent> = channelFlow {
         var attempt = 0
         while (true) {
             attempt++
-            usage.recordRequest()
+            usage.recordRequest(LlmProvider.OPENROUTER)
             val outcome = runSingleAttempt(request, this)
             when (outcome) {
                 is AttemptOutcome.Success -> return@channelFlow
@@ -71,7 +72,9 @@ class OpenRouterClient(
                     return@channelFlow
                 }
                 is AttemptOutcome.Retryable -> {
-                    delay(backoffDelayMillis(attempt))
+                    val delayMs = backoffDelayMillis(attempt)
+                    send(StreamEvent.Retrying(attempt, delayMs, outcome.message))
+                    delay(delayMs)
                 }
             }
         }
@@ -160,7 +163,7 @@ class OpenRouterClient(
     }
 
     /** Non-streaming helper used for cheap tasks like auto-titling a session. */
-    suspend fun completeOnce(request: OrChatRequest): Result<String> {
+    override suspend fun completeOnce(request: OrChatRequest): Result<String> {
         return try {
             Result.success(completeOnceOrThrow(request))
         } catch (e: CancellationException) {
@@ -172,7 +175,7 @@ class OpenRouterClient(
 
     private suspend fun completeOnceOrThrow(request: OrChatRequest): String {
         return retryWithBackoff(isRetryable = ::isTransientHttpError) {
-                usage.recordRequest()
+                usage.recordRequest(LlmProvider.OPENROUTER)
                 val apiKey = settings.getOpenRouterKey()
                 val body = json.encodeToString(OrChatRequest.serializer(), request.copy(stream = false))
                     .toRequestBody("application/json".toMediaType())

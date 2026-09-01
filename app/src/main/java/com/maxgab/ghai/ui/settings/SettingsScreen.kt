@@ -53,6 +53,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.maxgab.ghai.data.AppTheme
+import com.maxgab.ghai.data.LlmProvider
 import com.maxgab.ghai.data.SettingsRepository
 import com.maxgab.ghai.data.model.EffortLevel
 import com.maxgab.ghai.ui.ChatUiState
@@ -62,14 +63,14 @@ import com.maxgab.ghai.ui.MainViewModel
 @Composable
 fun SettingsScreen(state: ChatUiState, viewModel: MainViewModel, onBack: () -> Unit) {
     var openRouterKey by remember { mutableStateOf("") }
+    var geminiKey by remember { mutableStateOf("") }
     var githubToken by remember { mutableStateOf("") }
-    var loaded by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         openRouterKey = viewModel.getOpenRouterKey()
+        geminiKey = viewModel.getGeminiKey()
         githubToken = viewModel.getGithubToken()
-        loaded = true
     }
 
     Scaffold(
@@ -93,12 +94,26 @@ fun SettingsScreen(state: ChatUiState, viewModel: MainViewModel, onBack: () -> U
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(28.dp)
         ) {
-            SettingsSection(title = "Credenciales") {
-                SecretField(
-                    label = "API key de OpenRouter",
-                    value = openRouterKey,
-                    onValueChange = { openRouterKey = it; viewModel.setOpenRouterKey(it) }
+            SettingsSection(title = "Proveedor de IA") {
+                ProviderSelector(
+                    current = state.settings.provider,
+                    onSelect = { provider -> viewModel.updateSettings { setProvider(provider) } }
                 )
+            }
+
+            SettingsSection(title = "Credenciales") {
+                when (state.settings.provider) {
+                    LlmProvider.OPENROUTER -> SecretField(
+                        label = "API key de OpenRouter",
+                        value = openRouterKey,
+                        onValueChange = { openRouterKey = it; viewModel.setOpenRouterKey(it) }
+                    )
+                    LlmProvider.GEMINI -> SecretField(
+                        label = "API key de Google AI Studio (Gemini)",
+                        value = geminiKey,
+                        onValueChange = { geminiKey = it; viewModel.setGeminiKey(it) }
+                    )
+                }
                 SecretField(
                     label = "Token de GitHub",
                     value = githubToken,
@@ -115,12 +130,13 @@ fun SettingsScreen(state: ChatUiState, viewModel: MainViewModel, onBack: () -> U
 
             SettingsSection(title = "Modelo") {
                 ModelPicker(
+                    provider = state.settings.provider,
                     current = state.settings.model,
                     onSelect = { viewModel.updateSettings { setModel(it) } }
                 )
                 Text(
-                    "Modelo usado por defecto: Nemotron gratuito de OpenRouter. Puedes pegar cualquier " +
-                        "otro ID de modelo compatible con function calling.",
+                    "Puedes pegar cualquier ID de modelo compatible con function calling del proveedor " +
+                        "elegido arriba.",
                     style = MaterialTheme.typography.bodySmall,
                     color = LocalContentColor.current.copy(alpha = 0.6f)
                 )
@@ -155,7 +171,7 @@ fun SettingsScreen(state: ChatUiState, viewModel: MainViewModel, onBack: () -> U
                 ThemeSelector(current = state.settings.theme, onSelect = { viewModel.updateSettings { setTheme(it) } })
             }
 
-            SettingsSection(title = "Uso de OpenRouter") {
+            SettingsSection(title = "Uso de ${state.settings.provider.label}") {
                 UsageSection(state)
             }
 
@@ -227,9 +243,13 @@ private fun SecretField(label: String, value: String, onValueChange: (String) ->
 }
 
 @Composable
-private fun ModelPicker(current: String, onSelect: (String) -> Unit) {
+private fun ModelPicker(provider: LlmProvider, current: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var text by remember(current) { mutableStateOf(current) }
+    val presets = when (provider) {
+        LlmProvider.OPENROUTER -> SettingsRepository.OPENROUTER_MODEL_PRESETS
+        LlmProvider.GEMINI -> SettingsRepository.GEMINI_MODEL_PRESETS
+    }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
@@ -245,10 +265,34 @@ private fun ModelPicker(current: String, onSelect: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth()
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            SettingsRepository.MODEL_PRESETS.forEach { preset ->
+            presets.forEach { preset ->
                 DropdownMenuItem(
                     text = { Text(preset) },
                     onClick = { text = preset; onSelect(preset); expanded = false }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderSelector(current: LlmProvider, onSelect: (LlmProvider) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LlmProvider.entries.forEach { provider ->
+            val selected = provider == current
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                        RoundedCornerShape(10.dp)
+                    )
+                    .clickable { onSelect(provider) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    provider.label,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else LocalContentColor.current,
+                    style = MaterialTheme.typography.labelMedium
                 )
             }
         }
@@ -353,8 +397,9 @@ private fun UsageSection(state: ChatUiState) {
                 .padding(vertical = 4.dp)
         )
         Text(
-            "OpenRouter limita las cuentas gratuitas a ${usage.dailyLimit} peticiones diarias. " +
-                "El contador se reinicia a medianoche (hora local) y se calcula localmente en el dispositivo.",
+            "${state.settings.provider.label} limita el nivel gratuito a ${usage.dailyLimit} peticiones " +
+                "diarias. El contador se reinicia a medianoche (hora local) y se calcula localmente en " +
+                "el dispositivo.",
             style = MaterialTheme.typography.bodySmall,
             color = LocalContentColor.current.copy(alpha = 0.6f)
         )

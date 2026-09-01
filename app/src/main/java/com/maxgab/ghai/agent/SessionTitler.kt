@@ -1,6 +1,9 @@
 package com.maxgab.ghai.agent
 
 import com.maxgab.ghai.data.AppSettings
+import com.maxgab.ghai.data.LlmProvider
+import com.maxgab.ghai.network.GeminiClient
+import com.maxgab.ghai.network.LlmClient
 import com.maxgab.ghai.network.OpenRouterClient
 import com.maxgab.ghai.network.OrChatRequest
 import com.maxgab.ghai.network.OrMessage
@@ -8,7 +11,14 @@ import com.maxgab.ghai.network.OrMessage
 private const val TITLE_PROMPT = "Resume la siguiente conversación en un título corto de 3 a 6 " +
     "palabras, sin comillas ni punto final, en el mismo idioma del usuario. Responde solo con el título."
 
-class SessionTitler(private val openRouterClient: OpenRouterClient) {
+class SessionTitler(
+    private val openRouterClient: OpenRouterClient,
+    private val geminiClient: GeminiClient
+) {
+    private fun clientFor(settings: AppSettings): LlmClient = when (settings.provider) {
+        LlmProvider.OPENROUTER -> openRouterClient
+        LlmProvider.GEMINI -> geminiClient
+    }
 
     suspend fun generateTitle(userMessage: String, assistantMessage: String, settings: AppSettings): String? {
         val request = OrChatRequest(
@@ -20,7 +30,7 @@ class SessionTitler(private val openRouterClient: OpenRouterClient) {
             stream = false,
             temperature = 0.3
         )
-        return openRouterClient.completeOnce(request)
+        return clientFor(settings).completeOnce(request)
             .getOrNull()
             ?.trim()
             ?.trim('"', '“', '”', '.')
