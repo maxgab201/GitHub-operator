@@ -2,7 +2,6 @@ package com.maxgab.ghai.agent
 
 import com.maxgab.ghai.data.AppSettings
 import com.maxgab.ghai.data.model.ToolCall
-import com.maxgab.ghai.network.GithubToolExecutor
 import com.maxgab.ghai.network.OpenRouterClient
 import com.maxgab.ghai.network.OrChatRequest
 import com.maxgab.ghai.network.OrFunctionCall
@@ -27,7 +26,7 @@ sealed interface AgentEvent {
 
 class AgentEngine(
     private val openRouterClient: OpenRouterClient,
-    private val githubToolExecutor: GithubToolExecutor
+    private val toolRouter: ToolRouter
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -103,7 +102,7 @@ class AgentEngine(
 
             for (call in toolCalls) {
                 send(AgentEvent.ToolCallBegin(call.id, call.name, call.arguments))
-                val result = githubToolExecutor.execute(call.name, call.arguments)
+                val result = toolRouter.execute(call.name, call.arguments)
                 val success = isSuccessResult(result)
                 send(AgentEvent.ToolCallEnd(call.id, call.name, result, success))
                 messages += OrMessage(role = "tool", content = result, toolCallId = call.id, name = call.name)

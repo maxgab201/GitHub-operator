@@ -3,7 +3,7 @@ package com.maxgab.ghai.network
 import com.maxgab.ghai.data.SettingsRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -33,8 +33,8 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
-    suspend fun execute(toolName: String, argumentsJson: String): String = withContext(Dispatchers.IO) {
-        try {
+    suspend fun execute(toolName: String, argumentsJson: String): String {
+        return try {
             when (toolName) {
                 "github_api" -> retryWithBackoff(isRetryable = ::isTransientHttpError) {
                     callRest(argumentsJson)
@@ -53,7 +53,7 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         }
     }
 
-    private fun callRest(argumentsJson: String): String {
+    private suspend fun callRest(argumentsJson: String): String = runInterruptible(Dispatchers.IO) {
         val args = json.parseToJsonElement(argumentsJson).let { it as? JsonObject } ?: JsonObject(emptyMap())
         val method = args["method"]?.jsonPrimitive?.content?.uppercase() ?: "GET"
         val path = args["path"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("Falta 'path'")
@@ -89,14 +89,14 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         client.newCall(requestBuilder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw HttpStatusException(response.code, text.take(2000))
-            return buildJsonObject {
+            buildJsonObject {
                 put("status", JsonPrimitive(response.code))
                 put("body", runCatching { json.parseToJsonElement(text.ifBlank { "null" }) }.getOrDefault(JsonPrimitive(text)))
             }.toString()
         }
     }
 
-    private fun callGraphql(argumentsJson: String): String {
+    private suspend fun callGraphql(argumentsJson: String): String = runInterruptible(Dispatchers.IO) {
         val args = json.parseToJsonElement(argumentsJson).let { it as? JsonObject } ?: JsonObject(emptyMap())
         val query = args["query"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("Falta 'query'")
         val variables = (args["variables"] as? JsonObject) ?: JsonObject(emptyMap())
@@ -116,7 +116,7 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
         client.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw HttpStatusException(response.code, text.take(2000))
-            return text
+            text
         }
     }
 
