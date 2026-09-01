@@ -39,8 +39,14 @@ class OpenRouterClient(
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
+        // Inactivity timeout, not a total-duration cap: as long as OpenRouter keeps
+        // sending bytes (content, reasoning or SSE keep-alives) the stream can run
+        // indefinitely. If the connection stalls (e.g. the OS suspends the socket
+        // while the app is backgrounded) this fires so the retry loop can recover
+        // instead of leaving the UI stuck on "Pensando..." forever.
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val eventSourceFactory = EventSources.createFactory(client)
@@ -114,7 +120,7 @@ class OpenRouterClient(
                         val code = response?.code
                         val bodyText = runCatching { response?.body?.string() }.getOrNull()
                         val message = bodyText?.takeIf { it.isNotBlank() }
-                            ?: t?.message
+                            ?: t?.let(::friendlyNetworkMessage)
                             ?: "Fallo de conexión con OpenRouter"
                         val outcome = when {
                             code != null && (code == 429 || code in 500..599) -> AttemptOutcome.Retryable(message)
@@ -192,4 +198,18 @@ class OpenRouterClient(
             }
         }
     }
+}
+
+private fun friendlyNetworkMessage(t: Throwable): String = when (t) {
+    is java.net.UnknownHostException ->
+        "No se pudo conectar con OpenRouter: revisa tu conexión a Internet (Wi-Fi/datos, VPN o DNS privado)."
+    is java.net.SocketTimeoutException ->
+        "OpenRouter no respondió a tiempo (la conexión estuvo inactiva demasiado tiempo). Reintentando…"
+    is java.io.InterruptedIOException ->
+        "La conexión con OpenRouter se interrumpió (posiblemente la app pasó a segundo plano). Reintentando…"
+    is javax.net.ssl.SSLException ->
+        "Fallo de conexión segura (TLS) con OpenRouter."
+    is java.net.SocketException ->
+        "El sistema cerró la conexión con OpenRouter (por ejemplo, al pasar la app a segundo plano). Reintentando…"
+    else -> t.message ?: "Fallo de conexión con OpenRouter"
 }
