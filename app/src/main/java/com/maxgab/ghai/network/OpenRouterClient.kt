@@ -24,8 +24,6 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
-import kotlin.math.min
-import kotlin.math.pow
 
 private sealed interface AttemptOutcome {
     data object Success : AttemptOutcome
@@ -53,14 +51,16 @@ class OpenRouterClient(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     /**
-     * Streams a chat completion, transparently retrying transient failures
-     * (timeouts, 429, 5xx) with exponential backoff. Non-retryable failures
-     * (bad key, invalid request) are surfaced immediately as [StreamEvent.Failed].
+     * Streams a chat completion, retrying transient failures (timeouts, 429, 5xx,
+     * dropped connections) forever with the shared backoff schedule — the first
+     * attempt is instantaneous, then 3s, 5s, 10s, 15s, 30s, capping at 60s between
+     * attempts. Only a truly non-retryable failure (bad key, invalid request) is
+     * surfaced as [StreamEvent.Failed]; the caller (agent loop) can still cancel
+     * via the Stop button, which cancels this flow's collection.
      */
-    fun streamChat(request: OrChatRequest, maxAttempts: Int): Flow<StreamEvent> = channelFlow {
-        val attempts = maxAttempts.coerceAtLeast(1)
+    fun streamChat(request: OrChatRequest): Flow<StreamEvent> = channelFlow {
         var attempt = 0
-        while (attempt < attempts) {
+        while (true) {
             attempt++
             usage.recordRequest()
             val outcome = runSingleAttempt(request, this)
@@ -71,12 +71,7 @@ class OpenRouterClient(
                     return@channelFlow
                 }
                 is AttemptOutcome.Retryable -> {
-                    if (attempt >= attempts) {
-                        send(StreamEvent.Failed(outcome.message, retryable = false))
-                        return@channelFlow
-                    }
-                    val delayMs = min(20_000L, (1000L * 2.0.pow(attempt - 1)).toLong())
-                    delay(delayMs)
+                    delay(backoffDelayMillis(attempt))
                 }
             }
         }
@@ -165,12 +160,18 @@ class OpenRouterClient(
     }
 
     /** Non-streaming helper used for cheap tasks like auto-titling a session. */
-    suspend fun completeOnce(request: OrChatRequest, maxAttempts: Int): Result<String> {
-        return runCatching {
-            retryWithBackoff(
-                maxAttempts = maxAttempts,
-                isRetryable = ::isTransientHttpError
-            ) {
+    suspend fun completeOnce(request: OrChatRequest): Result<String> {
+        return try {
+            Result.success(completeOnceOrThrow(request))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun completeOnceOrThrow(request: OrChatRequest): String {
+        return retryWithBackoff(isRetryable = ::isTransientHttpError) {
                 usage.recordRequest()
                 val apiKey = settings.getOpenRouterKey()
                 val body = json.encodeToString(OrChatRequest.serializer(), request.copy(stream = false))
@@ -196,7 +197,6 @@ class OpenRouterClient(
                     }
                 }
             }
-        }
     }
 }
 

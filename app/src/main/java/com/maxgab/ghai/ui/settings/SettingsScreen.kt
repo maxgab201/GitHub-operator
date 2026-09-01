@@ -136,19 +136,13 @@ fun SettingsScreen(state: ChatUiState, viewModel: MainViewModel, onBack: () -> U
                     range = 0f..1.5f,
                     onChange = { viewModel.updateSettings { setTemperature(it.toDouble()) } }
                 )
-                LabeledSlider(
-                    label = "Máx. reintentos: ${state.settings.maxRetries}",
-                    value = state.settings.maxRetries.toFloat(),
-                    range = 1f..10f,
-                    steps = 8,
-                    onChange = { viewModel.updateSettings { setMaxRetries(it.toInt()) } }
-                )
-                LabeledSlider(
-                    label = "Máx. pasos de herramienta por turno: ${state.settings.maxToolIterations}",
-                    value = state.settings.maxToolIterations.toFloat(),
-                    range = 5f..60f,
-                    steps = 10,
-                    onChange = { viewModel.updateSettings { setMaxToolIterations(it.toInt()) } }
+                Text(
+                    "Los reintentos ante fallos (límite de peticiones, caídas de red, errores del " +
+                        "servidor) y los pasos de herramienta por turno son ilimitados: la IA sigue " +
+                        "intentando hasta lograrlo. Usa \"Detener\" en el chat para cortar una " +
+                        "generación en curso.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalContentColor.current.copy(alpha = 0.6f)
                 )
                 SwitchRow(
                     label = "Nombrar chats automáticamente con IA",

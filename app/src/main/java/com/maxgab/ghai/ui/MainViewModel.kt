@@ -291,9 +291,6 @@ class MainViewModel(
                             chatRepository.saveMessage(cur)
                             _state.update { it.copy(errorMessage = event.message) }
                         }
-                        AgentEvent.IterationLimitReached -> {
-                            _state.update { it.copy(errorMessage = "Se alcanzó el límite de pasos de la herramienta para este turno.") }
-                        }
                     }
                 }
             } catch (t: Throwable) {

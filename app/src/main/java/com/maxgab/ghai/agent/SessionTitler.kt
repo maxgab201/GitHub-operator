@@ -20,7 +20,7 @@ class SessionTitler(private val openRouterClient: OpenRouterClient) {
             stream = false,
             temperature = 0.3
         )
-        return openRouterClient.completeOnce(request, maxAttempts = 2)
+        return openRouterClient.completeOnce(request)
             .getOrNull()
             ?.trim()
             ?.trim('"', '“', '”', '.')

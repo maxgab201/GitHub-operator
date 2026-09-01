@@ -1,6 +1,7 @@
 package com.maxgab.ghai.network
 
 import com.maxgab.ghai.data.SettingsRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -32,17 +33,19 @@ class GithubToolExecutor(private val settings: SettingsRepository) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
-    suspend fun execute(toolName: String, argumentsJson: String, maxAttempts: Int): String = withContext(Dispatchers.IO) {
+    suspend fun execute(toolName: String, argumentsJson: String): String = withContext(Dispatchers.IO) {
         try {
             when (toolName) {
-                "github_api" -> retryWithBackoff(maxAttempts, isRetryable = ::isTransientHttpError) {
+                "github_api" -> retryWithBackoff(isRetryable = ::isTransientHttpError) {
                     callRest(argumentsJson)
                 }
-                "github_graphql" -> retryWithBackoff(maxAttempts, isRetryable = ::isTransientHttpError) {
+                "github_graphql" -> retryWithBackoff(isRetryable = ::isTransientHttpError) {
                     callGraphql(argumentsJson)
                 }
                 else -> errorJson("Herramienta desconocida: $toolName")
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: HttpStatusException) {
             errorJson("GitHub devolvió HTTP ${e.code}: ${e.message}")
         } catch (e: Exception) {

@@ -23,7 +23,6 @@ sealed interface AgentEvent {
     data class ToolCallEnd(val id: String, val name: String, val resultJson: String, val success: Boolean) : AgentEvent
     data class TurnFinished(val finalContent: String, val thinkingMillis: Long) : AgentEvent
     data class Failed(val message: String) : AgentEvent
-    data object IterationLimitReached : AgentEvent
 }
 
 class AgentEngine(
@@ -32,14 +31,17 @@ class AgentEngine(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Runs the model/tool loop with no step cap: it keeps calling tools and feeding
+     * results back for as long as the model asks it to, until it produces a final
+     * answer with no more tool calls. There is no artificial ceiling — the only way
+     * to stop an in-progress turn is the user's Stop button, which cancels this
+     * flow's collection.
+     */
     fun run(seedMessages: List<OrMessage>, settings: AppSettings): Flow<AgentEvent> = channelFlow {
         val messages = seedMessages.toMutableList()
-        val maxIterations = settings.maxToolIterations.coerceAtLeast(1)
-        var iteration = 0
 
-        while (iteration < maxIterations) {
-            iteration++
-
+        while (true) {
             val request = OrChatRequest(
                 model = settings.model,
                 messages = messages,
@@ -55,7 +57,7 @@ class AgentEngine(
             val thinkStart = System.currentTimeMillis()
             var thinkEnd = thinkStart
 
-            openRouterClient.streamChat(request, settings.maxRetries).collect { event ->
+            openRouterClient.streamChat(request).collect { event ->
                 when (event) {
                     is StreamEvent.ReasoningDelta -> {
                         reasoningBuilder.append(event.text)
@@ -101,15 +103,13 @@ class AgentEngine(
 
             for (call in toolCalls) {
                 send(AgentEvent.ToolCallBegin(call.id, call.name, call.arguments))
-                val result = githubToolExecutor.execute(call.name, call.arguments, settings.maxRetries)
+                val result = githubToolExecutor.execute(call.name, call.arguments)
                 val success = isSuccessResult(result)
                 send(AgentEvent.ToolCallEnd(call.id, call.name, result, success))
                 messages += OrMessage(role = "tool", content = result, toolCallId = call.id, name = call.name)
             }
             // The loop continues, feeding the tool results back to the model.
         }
-
-        send(AgentEvent.IterationLimitReached)
     }
 
     private fun isSuccessResult(resultJson: String): Boolean = runCatching {
